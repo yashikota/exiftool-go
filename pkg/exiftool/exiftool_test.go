@@ -230,7 +230,7 @@ func TestWriteMetadata(t *testing.T) {
 	defer et.Close()
 
 	// Get the test image path
-	srcPath := filepath.Join("..", "..", "test.jpg")
+	srcPath := filepath.Join("testdata", "test.jpg")
 
 	// Create a temp file for output
 	tmpDir := t.TempDir()
@@ -275,7 +275,7 @@ func TestWriteMetadataInPlace(t *testing.T) {
 	defer et.Close()
 
 	// Get the test image path
-	srcPath := filepath.Join("..", "..", "test.jpg")
+	srcPath := filepath.Join("testdata", "test.jpg")
 
 	// Copy to temp dir for in-place modification
 	tmpDir := t.TempDir()
@@ -318,7 +318,7 @@ func TestSetTag(t *testing.T) {
 	defer et.Close()
 
 	// Get the test image path
-	srcPath := filepath.Join("..", "..", "test.jpg")
+	srcPath := filepath.Join("testdata", "test.jpg")
 
 	// Create a temp file for output
 	tmpDir := t.TempDir()
