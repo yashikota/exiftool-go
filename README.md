@@ -14,7 +14,7 @@ Uses [zeroperl](https://github.com/6over3/zeroperl) (Perl compiled to WebAssembl
 ## CLI Usage
 
 ```bash
-go install github.com/yashikota/exiftool-go
+go install github.com/yashikota/exiftool-go@latest
 ```
 
 ```bash

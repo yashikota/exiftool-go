@@ -14,7 +14,7 @@ WebAssemblyで動作するPure GoのExifToolラッパー
 ## CLI使用方法
 
 ```bash
-go install github.com/yashikota/exiftool-go
+go install github.com/yashikota/exiftool-go@latest
 ```
 
 ```bash
