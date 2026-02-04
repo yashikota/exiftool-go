@@ -67,19 +67,19 @@ func main() {
 
 ## API
 
-- `New() (*ExifTool, error)`
+- `New() (*ExifTool, error)`  
     Creates a new ExifTool instance. Call Close when done.
 
-- `NewWithContext(ctx context.Context) (*ExifTool, error)`
+- `NewWithContext(ctx context.Context) (*ExifTool, error)`  
     Creates a new ExifTool instance with the given context.
 
-- `(*ExifTool) Close() error`
+- `(*ExifTool) Close() error`  
     Releases all resources associated with the ExifTool instance.
 
-- `(*ExifTool) Version() (string, error)`
+- `(*ExifTool) Version() (string, error)`  
     Returns the ExifTool version string.
 
-- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`
+- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`  
     Reads metadata from an image file and returns it as a map.
 
 ## How It Works
