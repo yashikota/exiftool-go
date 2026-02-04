@@ -67,19 +67,19 @@ func main() {
 
 ## API
 
-- `New() (*ExifTool, error)`
+- `New() (*ExifTool, error)`  
     新しいExifToolインスタンスを作成します。使用後はCloseを呼び出してください。
 
-- `NewWithContext(ctx context.Context) (*ExifTool, error)`
+- `NewWithContext(ctx context.Context) (*ExifTool, error)`  
     指定したコンテキストで新しいExifToolインスタンスを作成します。
 
-- `(*ExifTool) Close() error`
+- `(*ExifTool) Close() error`  
     ExifToolインスタンスに関連するすべてのリソースを解放します。
 
-- `(*ExifTool) Version() (string, error)`
+- `(*ExifTool) Version() (string, error)`  
     ExifToolのバージョン文字列を返します。
 
-- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`
+- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`  
     画像ファイルからメタデータを読み取り、マップとして返します。
 
 ## 仕組み
