@@ -83,8 +83,14 @@ func main() {
 - `(*ExifTool) Version() (string, error)`  
     ExifToolのバージョン文字列を返します。
 
-- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`  
+- `(*ExifTool) ReadMetadata(filePath string) (map[string]any, error)`
     画像ファイルからメタデータを読み取り、マップとして返します。
+
+- `(*ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[string]any) error`
+    複数のタグを画像ファイルに書き込みます。dstPathが空の場合、元ファイルを直接変更します。
+
+- `(*ExifTool) SetTag(srcPath string, dstPath string, tag string, value string) error`
+    単一のタグを画像ファイルに書き込みます。dstPathが空の場合、元ファイルを直接変更します。
 
 ## 仕組み
 

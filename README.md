@@ -83,8 +83,14 @@ func main() {
 - `(*ExifTool) Version() (string, error)`  
     Returns the ExifTool version string.
 
-- `(*ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error)`  
+- `(*ExifTool) ReadMetadata(filePath string) (map[string]any, error)`
     Reads metadata from an image file and returns it as a map.
+
+- `(*ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[string]any) error`
+    Writes multiple tags to an image file. If dstPath is empty, the source file is modified in place.
+
+- `(*ExifTool) SetTag(srcPath string, dstPath string, tag string, value string) error`
+    Writes a single tag to an image file. If dstPath is empty, the source file is modified in place.
 
 ## How It Works
 

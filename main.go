@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	Version string
+	Version    string
 	jsonOutput = flag.Bool("json", false, "Output as JSON")
 	showVer    = flag.Bool("version", false, "Show version")
 )
@@ -56,7 +56,7 @@ func main() {
 	defer et.Close()
 
 	// Store results for multiple files
-	var allResults []map[string]interface{}
+	var allResults []map[string]any
 
 	for _, filePath := range flag.Args() {
 		metadata, err := et.ReadMetadata(filePath)
@@ -82,7 +82,7 @@ func main() {
 	}
 }
 
-func printMetadata(filePath string, metadata map[string]interface{}) {
+func printMetadata(filePath string, metadata map[string]any) {
 	if len(flag.Args()) > 1 {
 		fmt.Printf("======== %s\n", filePath)
 	}

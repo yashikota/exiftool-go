@@ -243,7 +243,7 @@ func (et *ExifTool) eval(code string) (string, error) {
 }
 
 // ReadMetadata reads metadata from an image file.
-func (et *ExifTool) ReadMetadata(filePath string) (map[string]interface{}, error) {
+func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
 	// Copy file to temp directory for WASI access
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -278,7 +278,7 @@ print JSON::PP->new->utf8->encode(\%result);
 		return nil, err
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w (output: %s)", err, output)
 	}
@@ -290,4 +290,77 @@ print JSON::PP->new->utf8->encode(\%result);
 func (et *ExifTool) Version() (string, error) {
 	code := "use Image::ExifTool; print Image::ExifTool->VERSION;"
 	return et.eval(code)
+}
+
+// WriteMetadata writes multiple tags to an image file.
+// If dstPath is empty, the source file is modified in place.
+func (et *ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[string]any) error {
+	// Read source file
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to read source file: %w", err)
+	}
+
+	// Write to temp input file
+	tmpInput := et.tmpDir + "/input"
+	if err := os.WriteFile(tmpInput, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp input file: %w", err)
+	}
+	defer os.Remove(tmpInput)
+
+	// Convert tags to JSON
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+
+	// Execute Perl code to write metadata
+	code := fmt.Sprintf(`
+use Image::ExifTool;
+use JSON::PP;
+my $et = Image::ExifTool->new;
+my $tags = JSON::PP->new->utf8->decode('%s');
+foreach my $tag (keys %%$tags) {
+    $et->SetNewValue($tag, $tags->{$tag});
+}
+my $result = $et->WriteInfo('/tmp/input', '/tmp/output');
+print $result;
+`, string(tagsJSON))
+
+	output, err := et.eval(code)
+	if err != nil {
+		return fmt.Errorf("failed to execute write: %w", err)
+	}
+
+	// Check result: 1=success, 2=success with warnings, 0=failure
+	if output == "0" {
+		return fmt.Errorf("exiftool write failed")
+	}
+
+	// Read output file
+	tmpOutput := et.tmpDir + "/output"
+	outputData, err := os.ReadFile(tmpOutput)
+	if err != nil {
+		return fmt.Errorf("failed to read output file: %w", err)
+	}
+	defer os.Remove(tmpOutput)
+
+	// Determine destination path
+	dest := dstPath
+	if dest == "" {
+		dest = srcPath
+	}
+
+	// Write to destination
+	if err := os.WriteFile(dest, outputData, 0644); err != nil {
+		return fmt.Errorf("failed to write destination file: %w", err)
+	}
+
+	return nil
+}
+
+// SetTag writes a single tag to an image file.
+// If dstPath is empty, the source file is modified in place.
+func (et *ExifTool) SetTag(srcPath string, dstPath string, tag string, value string) error {
+	return et.WriteMetadata(srcPath, dstPath, map[string]any{tag: value})
 }
