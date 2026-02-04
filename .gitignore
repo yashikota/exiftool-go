@@ -1,0 +1,36 @@
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test.jpg
+*.tmp
+
+# Downloaded packages
+*.tgz
+package/
+
+# Temporary dev directory (created by library at runtime)
+dev/
+
+# Claude Code
+.claude/
