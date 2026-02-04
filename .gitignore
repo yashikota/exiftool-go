@@ -21,9 +21,10 @@ vendor/
 .DS_Store
 Thumbs.db
 
-# Test files
-test.jpg
+# Test files (but keep testdata)
+/test.jpg
 *.tmp
+!**/testdata/test.jpg
 
 # Downloaded packages
 *.tgz
