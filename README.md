@@ -94,7 +94,3 @@ func main() {
 - [ExifTool](https://exiftool.org/) by Phil Harvey
 - [zeroperl](https://github.com/6over3/zeroperl) by 6over3
 - [wazero](https://github.com/tetratelabs/wazero) by Tetrate
-
-## License
-
-Apache License 2.0
