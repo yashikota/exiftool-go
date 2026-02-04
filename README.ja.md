@@ -13,6 +13,10 @@ WebAssemblyで動作するPure GoのExifToolラッパー
 
 ## CLI使用方法
 
+[Releases](https://github.com/yashikota/exiftool-go/releases) からバイナリをダウンロード
+
+もしくは  
+
 ```bash
 go install github.com/yashikota/exiftool-go@latest
 ```

@@ -13,6 +13,10 @@ Uses [zeroperl](https://github.com/6over3/zeroperl) (Perl compiled to WebAssembl
 
 ## CLI Usage
 
+Download binary from [Releases](https://github.com/yashikota/exiftool-go/releases)  
+
+or  
+
 ```bash
 go install github.com/yashikota/exiftool-go@latest
 ```
