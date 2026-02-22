@@ -4,6 +4,8 @@ WebAssemblyで動作するPure GoのExifToolラッパー
 
 [zeroperl](https://github.com/6over3/zeroperl)（PerlをWebAssemblyにコンパイルしたもの）と[wazero](https://github.com/tetratelabs/wazero)（Pure GoのWebAssemblyランタイム）を使用して、外部依存なしでExifTool機能を提供します。
 
+<img width="1915" height="910" alt="exiftool-go" src="https://github.com/user-attachments/assets/858cac94-806a-4acb-9145-bb1b0a99cd39" />
+
 ## 特徴
 
 - **Pure Go**: CGO不要、クロスコンパイルが簡単
