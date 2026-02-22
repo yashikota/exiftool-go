@@ -4,7 +4,10 @@ Pure Go ExifTool wrapper powered by WebAssembly.
 
 Uses [zeroperl](https://github.com/6over3/zeroperl) (Perl compiled to WebAssembly) and [wazero](https://github.com/tetratelabs/wazero) (pure Go WebAssembly runtime) to provide ExifTool functionality without any external dependencies.
 
+<img width="1915" height="910" alt="exiftool-go" src="https://github.com/user-attachments/assets/858cac94-806a-4acb-9145-bb1b0a99cd39" />
+
 ## Features
+
 
 - **Pure Go**: No CGO required, easy cross-compilation
 - **Single Binary**: WebAssembly module is embedded, distributable as a single binary
