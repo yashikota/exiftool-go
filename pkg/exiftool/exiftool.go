@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/tetratelabs/wazero"
@@ -283,7 +284,29 @@ print JSON::PP->new->utf8->encode(\%result);
 		return nil, fmt.Errorf("failed to parse JSON: %w (output: %s)", err, output)
 	}
 
+	// Replace temp-path fields with the user-supplied path values
+	result["SourceFile"] = filePath
+	result["Directory"] = filepath.Dir(filePath)
+	result["FileName"] = filepath.Base(filePath)
+
+	// Fix FilePermissions from the real file (sandbox always reports ----------)
+	if info, err := os.Stat(filePath); err == nil {
+		result["FilePermissions"] = formatFilePermissions(info.Mode())
+	}
+
 	return result, nil
+}
+
+// formatFilePermissions formats an os.FileMode into ExifTool's rwxrwxrwx style.
+func formatFilePermissions(mode os.FileMode) string {
+	const rwx = "rwxrwxrwx"
+	buf := []byte("---------")
+	for i := range 9 {
+		if mode&(1<<uint(8-i)) != 0 {
+			buf[i] = rwx[i]
+		}
+	}
+	return string(buf)
 }
 
 // Version returns the ExifTool version.

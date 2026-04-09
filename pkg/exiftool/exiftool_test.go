@@ -463,6 +463,142 @@ func TestReadMetadataGolden(t *testing.T) {
 	}
 }
 
+// TestReadMetadataFilePermissions verifies that FilePermissions reflects the
+// real file's mode, not the hardcoded temp-file permissions used in the sandbox.
+func TestReadMetadataFilePermissions(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	// Write a temp file with known permissions
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "perms.jpg")
+
+	src, err := os.ReadFile(filepath.Join("testdata", "test.jpg"))
+	if err != nil {
+		t.Fatalf("Failed to read test file: %v", err)
+	}
+	if err := os.WriteFile(tmpFile, src, 0640); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+
+	metadata, err := et.ReadMetadata(tmpFile)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed: %v", err)
+	}
+
+	got, ok := metadata["FilePermissions"]
+	if !ok {
+		t.Fatal("FilePermissions tag should be present")
+	}
+	if got == "----------" {
+		t.Error("FilePermissions should not be ---------- (sandbox default)")
+	}
+	if got != "rw-r-----" {
+		t.Errorf("FilePermissions: expected %q, got %v", "rw-r-----", got)
+	}
+}
+
+// TestReadMetadataDirectory verifies that Directory, FileName and SourceFile
+// reflect the user-supplied path, not the internal temp path used by the WASM sandbox.
+func TestReadMetadataDirectory(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	srcPath := filepath.Join("testdata", "test.jpg")
+
+	metadata, err := et.ReadMetadata(srcPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed: %v", err)
+	}
+
+	if got, ok := metadata["SourceFile"]; !ok || got != srcPath {
+		t.Errorf("SourceFile: expected %q, got %v", srcPath, got)
+	}
+
+	if got, ok := metadata["Directory"]; !ok || got != filepath.Dir(srcPath) {
+		t.Errorf("Directory: expected %q, got %v", filepath.Dir(srcPath), got)
+	}
+
+	if got, ok := metadata["FileName"]; !ok || got != filepath.Base(srcPath) {
+		t.Errorf("FileName: expected %q, got %v", filepath.Base(srcPath), got)
+	}
+
+	// Ensure no temp-path leakage
+	for _, field := range []string{"SourceFile", "Directory", "FileName"} {
+		if val, ok := metadata[field]; ok {
+			if s, ok := val.(string); ok && (s == "/tmp/input" || s == "/tmp") {
+				t.Errorf("%s contains temp path value %q", field, s)
+			}
+		}
+	}
+}
+
+// TestReadMetadataDirectoryRelativePath verifies path fields with a relative input path.
+func TestReadMetadataDirectoryRelativePath(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	// Use a path relative to the current working directory
+	srcPath := filepath.Join("testdata", "test.jpg")
+
+	metadata, err := et.ReadMetadata(srcPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed: %v", err)
+	}
+
+	if got, ok := metadata["Directory"]; !ok || got != "testdata" {
+		t.Errorf("Directory: expected %q, got %v", "testdata", got)
+	}
+
+	if got, ok := metadata["FileName"]; !ok || got != "test.jpg" {
+		t.Errorf("FileName: expected %q, got %v", "test.jpg", got)
+	}
+}
+
+// TestReadMetadataDirectoryAfterWrite verifies path fields are correct when reading
+// a file written to a temp directory by WriteMetadata.
+func TestReadMetadataDirectoryAfterWrite(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	srcPath := filepath.Join("testdata", "test.jpg")
+	tmpDir := t.TempDir()
+	dstPath := filepath.Join(tmpDir, "output.jpg")
+
+	if err := et.WriteMetadata(srcPath, dstPath, map[string]any{"Artist": "Dir Test"}); err != nil {
+		t.Fatalf("WriteMetadata failed: %v", err)
+	}
+
+	metadata, err := et.ReadMetadata(dstPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed: %v", err)
+	}
+
+	if got, ok := metadata["SourceFile"]; !ok || got != dstPath {
+		t.Errorf("SourceFile: expected %q, got %v", dstPath, got)
+	}
+
+	if got, ok := metadata["Directory"]; !ok || got != filepath.Dir(dstPath) {
+		t.Errorf("Directory: expected %q, got %v", filepath.Dir(dstPath), got)
+	}
+
+	if got, ok := metadata["FileName"]; !ok || got != "output.jpg" {
+		t.Errorf("FileName: expected %q, got %v", "output.jpg", got)
+	}
+}
+
 // extractTags extracts specified tags from metadata
 func extractTags(metadata map[string]any, tags []string) map[string]any {
 	result := make(map[string]any)
