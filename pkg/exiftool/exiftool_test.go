@@ -635,14 +635,14 @@ func TestWriteMetadataEvalFailure(t *testing.T) {
 
 	// Directly test that eval returning empty string triggers an error
 	// by calling eval with code that dies
-	output, err := et.eval("die 'test error';")
+	output, stderrMsg, err := et.eval("die 'test error';")
 	if err != nil {
 		// eval itself may return an error - that's fine
 		return
 	}
 	// If eval doesn't error but returns empty, our WriteMetadata would now catch it
 	if output == "" {
-		t.Log("eval returned empty string on die - WriteMetadata would correctly report failure")
+		t.Logf("eval returned empty string on die (stderr: %s) - WriteMetadata would correctly report failure", stderrMsg)
 	}
 }
 

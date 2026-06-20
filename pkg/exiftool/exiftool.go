@@ -207,8 +207,8 @@ func (et *ExifTool) callWithAsyncify(fn api.Function, args ...uint64) ([]uint64,
 	}
 }
 
-// eval executes Perl code and returns stdout.
-func (et *ExifTool) eval(code string) (string, error) {
+// eval executes Perl code and returns stdout and stderr.
+func (et *ExifTool) eval(code string) (string, string, error) {
 	et.mu.Lock()
 	defer et.mu.Unlock()
 
@@ -219,20 +219,20 @@ func (et *ExifTool) eval(code string) (string, error) {
 	codeBytes := append([]byte(code), 0)
 	results, err := et.mallocFn.Call(et.ctx, uint64(len(codeBytes)))
 	if err != nil {
-		return "", fmt.Errorf("malloc failed: %w", err)
+		return "", "", fmt.Errorf("malloc failed: %w", err)
 	}
 	codePtr := uint32(results[0])
 	defer et.freeFn.Call(et.ctx, uint64(codePtr))
 
 	mem := et.mod.Memory()
 	if !mem.Write(codePtr, codeBytes) {
-		return "", fmt.Errorf("failed to write code to memory")
+		return "", "", fmt.Errorf("failed to write code to memory")
 	}
 
 	// Call eval
 	_, err = et.callWithAsyncify(et.evalFn, uint64(codePtr), 0, 0, 0)
 	if err != nil {
-		return "", fmt.Errorf("eval failed: %w", err)
+		return "", "", fmt.Errorf("eval failed: %w", err)
 	}
 
 	// Flush stdout
@@ -240,7 +240,7 @@ func (et *ExifTool) eval(code string) (string, error) {
 		et.flushFn.Call(et.ctx)
 	}
 
-	return et.stdout.String(), nil
+	return et.stdout.String(), et.stderr.String(), nil
 }
 
 // ReadMetadata reads metadata from an image file.
@@ -274,7 +274,7 @@ foreach my $tag (keys %$info) {
 }
 print JSON::PP->new->utf8->encode(\%result);
 `
-	output, err := et.eval(code)
+	output, _, err := et.eval(code)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +312,8 @@ func formatFilePermissions(mode os.FileMode) string {
 // Version returns the ExifTool version.
 func (et *ExifTool) Version() (string, error) {
 	code := "use Image::ExifTool; print Image::ExifTool->VERSION;"
-	return et.eval(code)
+	output, _, err := et.eval(code)
+	return output, err
 }
 
 // WriteMetadata writes multiple tags to an image file.
@@ -350,7 +351,7 @@ my $result = $et->WriteInfo('/tmp/input', '/tmp/output');
 print $result;
 `, string(tagsJSON))
 
-	output, err := et.eval(code)
+	output, stderrMsg, err := et.eval(code)
 	if err != nil {
 		return fmt.Errorf("failed to execute write: %w", err)
 	}
@@ -358,7 +359,6 @@ print $result;
 	// Check result: 1=success, 2=success with warnings, 0=failure
 	// Empty output means Perl died (e.g. missing XS module) without producing a result.
 	if output == "0" || output == "" {
-		stderrMsg := et.stderr.String()
 		if stderrMsg != "" {
 			return fmt.Errorf("exiftool write failed: %s", stderrMsg)
 		}
@@ -371,10 +371,10 @@ print $result;
 	if err != nil {
 		return fmt.Errorf("failed to read output file: %w", err)
 	}
+	defer os.Remove(tmpOutput)
 	if len(outputData) == 0 {
 		return fmt.Errorf("exiftool write produced empty output")
 	}
-	defer os.Remove(tmpOutput)
 
 	// Determine destination path
 	dest := dstPath
