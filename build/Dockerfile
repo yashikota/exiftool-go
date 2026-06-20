@@ -77,7 +77,7 @@ ENV PERL_VERSION=${PERL_VERSION} \
 RUN chmod +x /build/repo/pipeline/*.sh
 
 RUN /build/repo/pipeline/build-native-perl.sh
-RUN [ "${BUILD_EXIFTOOL}" = "true" ] && /build/repo/pipeline/build-exiftool.sh || true
+RUN if [ "${BUILD_EXIFTOOL}" = "true" ]; then /build/repo/pipeline/build-exiftool.sh; fi
 
 
 FROM native-perl AS wasi-perl
