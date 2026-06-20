@@ -20,7 +20,7 @@ docker build \
 
 echo "Extracting exiftool.wasm..."
 mkdir -p "$OUTPUT_DIR"
-docker run --rm -v "$OUTPUT_DIR:/output" exiftool-wasm-builder
+docker run --rm --user "$(id -u):$(id -g)" -v "$OUTPUT_DIR:/output" exiftool-wasm-builder
 
 echo "Done: $OUTPUT_DIR/exiftool.wasm"
 ls -lh "$OUTPUT_DIR/exiftool.wasm"

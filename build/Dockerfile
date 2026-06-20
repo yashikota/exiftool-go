@@ -40,15 +40,17 @@ ENV PATH="/opt/binaryen/bin:${PATH}"
 
 FROM base AS zeroperl-src
 
-ARG ZEROPERL_REF=main
+ARG ZEROPERL_REF=c28db5dd4fc9660e67117dfdb9f18a43623f5f3d
 
-RUN git clone --depth=1 --branch="${ZEROPERL_REF}" https://github.com/6over3/zeroperl.git /build/repo
+RUN git clone https://github.com/6over3/zeroperl.git /build/repo && \
+    cd /build/repo && git checkout "${ZEROPERL_REF}"
 
 COPY patches/ /build/custom-patches/
-RUN if [ -d /build/custom-patches ] && ls /build/custom-patches/*.patch 1>/dev/null 2>&1; then \
+RUN if [ -d /build/custom-patches ]; then \
         cd /build/repo && \
         for p in /build/custom-patches/*.patch; do \
-            echo "Applying $p" && patch -p1 < "$p"; \
+            [ -f "$p" ] || continue; \
+            echo "Applying $p" && patch -p1 < "$p" || exit 1; \
         done; \
     fi
 
