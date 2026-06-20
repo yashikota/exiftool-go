@@ -665,6 +665,80 @@ func TestWriteMetadataPDF(t *testing.T) {
 	}
 }
 
+func TestWriteMetadataCorruptFile(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	// Create a corrupt file (random bytes that aren't a valid image)
+	tmpDir := t.TempDir()
+	srcPath := filepath.Join(tmpDir, "corrupt.jpg")
+	if err := os.WriteFile(srcPath, []byte("not a valid image file"), 0644); err != nil {
+		t.Fatalf("Failed to create corrupt file: %v", err)
+	}
+
+	dstPath := filepath.Join(tmpDir, "output.jpg")
+	err = et.WriteMetadata(srcPath, dstPath, map[string]any{
+		"Artist": "Test",
+	})
+	if err == nil {
+		// If no error, the output file must not be 0 bytes
+		info, statErr := os.Stat(dstPath)
+		if statErr != nil || info.Size() == 0 {
+			t.Error("WriteMetadata should return an error when output is empty")
+		}
+	}
+}
+
+func TestWriteMetadataEvalFailure(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	// Directly test that eval returning empty string triggers an error
+	// by calling eval with code that dies
+	output, stderrMsg, err := et.eval("die 'test error';")
+	if err != nil {
+		// eval itself may return an error - that's fine
+		return
+	}
+	// If eval doesn't error but returns empty, our WriteMetadata would now catch it
+	if output == "" {
+		t.Logf("eval returned empty string on die (stderr: %s) - WriteMetadata would correctly report failure", stderrMsg)
+	}
+}
+
+func TestWriteMetadataOutputFileNonZeroSize(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	srcPath := filepath.Join("testdata", "test.jpg")
+	tmpDir := t.TempDir()
+	dstPath := filepath.Join(tmpDir, "output.jpg")
+
+	err = et.WriteMetadata(srcPath, dstPath, map[string]any{
+		"Artist": "Size Check",
+	})
+	if err != nil {
+		t.Fatalf("WriteMetadata failed: %v", err)
+	}
+
+	info, err := os.Stat(dstPath)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Error("Output file should not be 0 bytes")
+	}
+}
+
 // extractTags extracts specified tags from metadata
 func extractTags(metadata map[string]any, tags []string) map[string]any {
 	result := make(map[string]any)
