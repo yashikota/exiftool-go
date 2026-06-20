@@ -356,7 +356,12 @@ print $result;
 	}
 
 	// Check result: 1=success, 2=success with warnings, 0=failure
-	if output == "0" {
+	// Empty output means Perl died (e.g. missing XS module) without producing a result.
+	if output == "0" || output == "" {
+		stderrMsg := et.stderr.String()
+		if stderrMsg != "" {
+			return fmt.Errorf("exiftool write failed: %s", stderrMsg)
+		}
 		return fmt.Errorf("exiftool write failed")
 	}
 
@@ -365,6 +370,9 @@ print $result;
 	outputData, err := os.ReadFile(tmpOutput)
 	if err != nil {
 		return fmt.Errorf("failed to read output file: %w", err)
+	}
+	if len(outputData) == 0 {
+		return fmt.Errorf("exiftool write produced empty output")
 	}
 	defer os.Remove(tmpOutput)
 
