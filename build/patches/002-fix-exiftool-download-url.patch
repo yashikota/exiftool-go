@@ -1,0 +1,20 @@
+From: exiftool-go maintainers
+Subject: Use GitHub mirror for ExifTool download
+
+The direct download URL at exiftool.org no longer works (returns 404).
+Use the GitHub mirror at github.com/exiftool/exiftool instead.
+
+diff --git a/pipeline/build-exiftool.sh b/pipeline/build-exiftool.sh
+--- a/pipeline/build-exiftool.sh
++++ b/pipeline/build-exiftool.sh
+@@ -8,8 +8,8 @@ REPO_DIR="${REPO_DIR:-/build/repo}"
+ export PATH="$NATIVE_DIR/prefix/bin:$PATH"
+ PERL="$NATIVE_DIR/prefix/bin/perl"
+
+-curl -fsSL "https://www.exiftool.org/Image-ExifTool-${EXIFTOOL_VERSION}.tar.gz" | tar -xzf - -C /build
+-cd "/build/Image-ExifTool-${EXIFTOOL_VERSION}"
++curl -fsSL "https://github.com/exiftool/exiftool/archive/refs/tags/${EXIFTOOL_VERSION}.tar.gz" | tar -xzf - -C /build
++cd "/build/exiftool-${EXIFTOOL_VERSION}"
+ $PERL Makefile.PL
+ make
+ make install PREFIX="$NATIVE_DIR/prefix"

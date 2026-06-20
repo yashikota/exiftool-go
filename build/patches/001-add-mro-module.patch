@@ -1,0 +1,38 @@
+From: exiftool-go maintainers
+Subject: Statically link mro XS module for PDF support
+
+The mro module is required by overload.pm when ExifTool processes PDF
+files. Without it, WriteInfo on PDFs fails silently because dynamic
+loading is not available in the WASM build.
+
+diff --git a/pipeline/build-wasm.sh b/pipeline/build-wasm.sh
+index a94b3cc..fcb7a6b 100644
+--- a/pipeline/build-wasm.sh
++++ b/pipeline/build-wasm.sh
+@@ -104,6 +104,7 @@ wasic \
+     lib/auto/Fcntl/Fcntl.a \
+     lib/auto/Opcode/Opcode.a \
+     lib/auto/Time/HiRes/HiRes.a \
++    lib/auto/mro/mro.a \
+     $(cat ext.libs) \
+     -lz -lbz2 \
+     -lm -lwasi-emulated-signal -lwasi-emulated-getpid \
+diff --git a/stubs/zeroperl.c b/stubs/zeroperl.c
+index c32bf47..1bf269d 100644
+--- a/stubs/zeroperl.c
++++ b/stubs/zeroperl.c
+@@ -2242,6 +2242,7 @@ EXTERN_C void boot_List__Util(pTHX_ CV *cv);
+ EXTERN_C void boot_Fcntl(pTHX_ CV *cv);
+ EXTERN_C void boot_Opcode(pTHX_ CV *cv);
+ EXTERN_C void boot_Time__HiRes(pTHX_ CV* cv);
++EXTERN_C void boot_mro(pTHX_ CV *cv);
+
+ static void xs_init(pTHX) {
+   static const char file[] = __FILE__;
+@@ -2285,4 +2286,5 @@ static void xs_init(pTHX) {
+   newXS("Fcntl::bootstrap", boot_Fcntl, file);
+   newXS("Opcode::bootstrap", boot_Opcode, file);
+   newXS("Time::HiRes::bootstrap", boot_Time__HiRes, file);
++  newXS("mro::bootstrap", boot_mro, file);
+ }
+\ No newline at end of file
