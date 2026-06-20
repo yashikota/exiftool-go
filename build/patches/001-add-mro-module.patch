@@ -35,3 +35,4 @@ index c32bf47..1bf269d 100644
    newXS("Time::HiRes::bootstrap", boot_Time__HiRes, file);
 +  newXS("mro::bootstrap", boot_mro, file);
  }
+\ No newline at end of file

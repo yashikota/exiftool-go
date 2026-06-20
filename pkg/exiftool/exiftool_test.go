@@ -599,6 +599,72 @@ func TestReadMetadataDirectoryAfterWrite(t *testing.T) {
 	}
 }
 
+func TestReadMetadataPDF(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	srcPath := filepath.Join("testdata", "test.pdf")
+
+	metadata, err := et.ReadMetadata(srcPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed for PDF: %v", err)
+	}
+
+	if metadata == nil || len(metadata) == 0 {
+		t.Fatal("Metadata should not be empty for PDF")
+	}
+
+	if fileType, ok := metadata["FileType"]; !ok || fileType != "PDF" {
+		t.Errorf("FileType should be PDF, got %v", metadata["FileType"])
+	}
+
+	if mimeType, ok := metadata["MIMEType"]; !ok || mimeType != "application/pdf" {
+		t.Errorf("MIMEType should be application/pdf, got %v", mimeType)
+	}
+}
+
+func TestWriteMetadataPDF(t *testing.T) {
+	et, err := New()
+	if err != nil {
+		t.Fatalf("Failed to create ExifTool: %v", err)
+	}
+	defer et.Close()
+
+	srcPath := filepath.Join("testdata", "test.pdf")
+	tmpDir := t.TempDir()
+	dstPath := filepath.Join(tmpDir, "output.pdf")
+
+	tags := map[string]any{
+		"Author": "Test Author",
+		"Title":  "Test Title",
+	}
+
+	err = et.WriteMetadata(srcPath, dstPath, tags)
+	if err != nil {
+		t.Fatalf("WriteMetadata failed for PDF (mro module may be missing): %v", err)
+	}
+
+	if _, err := os.Stat(dstPath); os.IsNotExist(err) {
+		t.Fatal("Output PDF file was not created")
+	}
+
+	metadata, err := et.ReadMetadata(dstPath)
+	if err != nil {
+		t.Fatalf("ReadMetadata failed for written PDF: %v", err)
+	}
+
+	if author, ok := metadata["Author"]; !ok || author != "Test Author" {
+		t.Errorf("Author tag not set correctly: got %v", author)
+	}
+
+	if title, ok := metadata["Title"]; !ok || title != "Test Title" {
+		t.Errorf("Title tag not set correctly: got %v", title)
+	}
+}
+
 // extractTags extracts specified tags from metadata
 func extractTags(metadata map[string]any, tags []string) map[string]any {
 	result := make(map[string]any)
