@@ -50,7 +50,7 @@ exiftool-go -overwrite_original -Author="Test Author" document.pdf
 exiftool-go -o output.pdf -Author="Test Author" -Title="Test Title" document.pdf
 ```
 
-対応しているExifTool互換CLIオプションは、`-ver`、`-j`/`-json`、`-s`、`-G`、`-a`、`-q`、`-P`、`-o`、`-overwrite_original`、`-overwrite_original_in_place`、`-TAG`、`--TAG`、`-TAG=value` です。
+CLIは同梱したExifToolアプリケーションスクリプトへ委譲するため、`-tagsFromFile`、`-r`、`-ext`、`-if`、`-execute`、`-stay_open`、`-TAG`、`--TAG`、`-TAG=value` などのExifToolコマンドラインオプションはExifTool自身が処理します。
 
 ## ライブラリ使用方法
 

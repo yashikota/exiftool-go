@@ -51,7 +51,7 @@ exiftool-go -overwrite_original -Author="Test Author" document.pdf
 exiftool-go -o output.pdf -Author="Test Author" -Title="Test Title" document.pdf
 ```
 
-Supported ExifTool-compatible CLI options include `-ver`, `-j`/`-json`, `-s`, `-G`, `-a`, `-q`, `-P`, `-o`, `-overwrite_original`, `-overwrite_original_in_place`, `-TAG`, `--TAG`, and `-TAG=value`.
+The CLI delegates to the bundled ExifTool application script, so ExifTool command-line options such as `-tagsFromFile`, `-r`, `-ext`, `-if`, `-execute`, `-stay_open`, `-TAG`, `--TAG`, and `-TAG=value` are handled by ExifTool itself.
 
 ## Library Usage
 

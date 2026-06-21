@@ -1,68 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-func TestParseArgsWriteTag(t *testing.T) {
-	cfg, err := parseArgs([]string{"-Author=test", "-Title=Test PDF", "document.pdf"})
-	if err != nil {
-		t.Fatalf("parseArgs failed: %v", err)
-	}
-
-	if len(cfg.files) != 1 || cfg.files[0] != "document.pdf" {
-		t.Fatalf("files = %#v, want document.pdf", cfg.files)
-	}
-
-	if cfg.tags["Author"] != "test" {
-		t.Fatalf("Author = %#v, want test", cfg.tags["Author"])
-	}
-
-	if cfg.tags["Title"] != "Test PDF" {
-		t.Fatalf("Title = %#v, want Test PDF", cfg.tags["Title"])
-	}
-}
-
-func TestParseArgsReadOptions(t *testing.T) {
-	cfg, err := parseArgs([]string{"-j", "-s", "-G", "-a", "--FileSize", "-Author", "document.pdf"})
-	if err != nil {
-		t.Fatalf("parseArgs failed: %v", err)
-	}
-
-	if !cfg.jsonOutput || !cfg.shortOutput || !cfg.groupNames || !cfg.duplicates {
-		t.Fatalf("read flags were not parsed: %#v", cfg)
-	}
-
-	if len(cfg.readTags) != 1 || cfg.readTags[0] != "Author" {
-		t.Fatalf("readTags = %#v, want Author", cfg.readTags)
-	}
-
-	if len(cfg.excludeTags) != 1 || cfg.excludeTags[0] != "FileSize" {
-		t.Fatalf("excludeTags = %#v, want FileSize", cfg.excludeTags)
-	}
-}
-
-func TestParseArgsOutputFile(t *testing.T) {
-	cfg, err := parseArgs([]string{"-o", "output.pdf", "-Author=test", "input.pdf"})
-	if err != nil {
-		t.Fatalf("parseArgs failed: %v", err)
-	}
-
-	if cfg.outputPath != "output.pdf" {
-		t.Fatalf("outputPath = %q, want output.pdf", cfg.outputPath)
-	}
-}
-
-func TestParseArgsOutputRequiresSingleInput(t *testing.T) {
-	_, err := parseArgs([]string{"-o", "output.pdf", "-Author=test", "one.pdf", "two.pdf"})
-	if err == nil {
-		t.Fatal("parseArgs should fail when -o is used with multiple inputs")
-	}
-}
 
 func TestCLIExifToolCompatibleReadOptions(t *testing.T) {
 	bin := buildCLI(t)
@@ -93,31 +38,32 @@ func TestCLIExifToolCompatibleReadOptions(t *testing.T) {
 	}
 
 	groupOut := run("-G", "-FileType", pdf)
-	if !strings.Contains(groupOut, "[File] FileType") {
+	if !strings.Contains(groupOut, "[File]") || !strings.Contains(groupOut, "File Type") {
 		t.Fatalf("-G output = %s", groupOut)
 	}
 }
 
-func TestCLIWriteCreatesOriginalBackupByDefault(t *testing.T) {
+func TestCLIExifToolCompatibleWriteOptions(t *testing.T) {
 	bin := buildCLI(t)
 	src := filepath.Join("pkg", "exiftool", "testdata", "test.pdf")
 	tmpDir := t.TempDir()
 	pdf := filepath.Join(tmpDir, "test.pdf")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
-	}
-	if err := os.WriteFile(pdf, data, 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	copyFile(t, src, pdf)
 
 	cmd := exec.Command(bin, "-Author=test", pdf)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("write failed: %v\n%s", err, out)
 	}
-
 	if _, err := os.Stat(pdf + "_original"); err != nil {
 		t.Fatalf("backup was not created: %v", err)
+	}
+
+	out, err := exec.Command(bin, "-s", "-Author", pdf).CombinedOutput()
+	if err != nil {
+		t.Fatalf("read back failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Author") || !strings.Contains(string(out), "test") {
+		t.Fatalf("author was not written: %s", out)
 	}
 }
 
@@ -126,13 +72,7 @@ func TestCLIOverwriteOriginalSkipsBackup(t *testing.T) {
 	src := filepath.Join("pkg", "exiftool", "testdata", "test.pdf")
 	tmpDir := t.TempDir()
 	pdf := filepath.Join(tmpDir, "test.pdf")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
-	}
-	if err := os.WriteFile(pdf, data, 0644); err != nil {
-		t.Fatalf("WriteFile failed: %v", err)
-	}
+	copyFile(t, src, pdf)
 
 	cmd := exec.Command(bin, "-overwrite_original", "-Author=test", pdf)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -144,6 +84,44 @@ func TestCLIOverwriteOriginalSkipsBackup(t *testing.T) {
 	}
 }
 
+func TestCLITagsFromFileOption(t *testing.T) {
+	bin := buildCLI(t)
+	src := filepath.Join("pkg", "exiftool", "testdata", "test.pdf")
+	tmpDir := t.TempDir()
+	from := filepath.Join(tmpDir, "from.pdf")
+	to := filepath.Join(tmpDir, "to.pdf")
+	copyFile(t, src, from)
+	copyFile(t, src, to)
+
+	if out, err := exec.Command(bin, "-overwrite_original", "-Author=source author", from).CombinedOutput(); err != nil {
+		t.Fatalf("source write failed: %v\n%s", err, out)
+	}
+	if out, err := exec.Command(bin, "-overwrite_original", "-tagsFromFile", from, "-Author", to).CombinedOutput(); err != nil {
+		t.Fatalf("tagsFromFile failed: %v\n%s", err, out)
+	}
+
+	out, err := exec.Command(bin, "-s", "-Author", to).CombinedOutput()
+	if err != nil {
+		t.Fatalf("read back failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "source author") {
+		t.Fatalf("Author was not copied: %s", out)
+	}
+}
+
+func TestCLIArgfileFromStdin(t *testing.T) {
+	bin := buildCLI(t)
+	cmd := exec.Command(bin, "-@", "-")
+	cmd.Stdin = bytes.NewBufferString("-ver\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("-@ - failed: %v\n%s", err, out)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		t.Fatalf("-@ - returned empty output")
+	}
+}
+
 func buildCLI(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "exiftool-go")
@@ -152,4 +130,15 @@ func buildCLI(t *testing.T) string {
 		t.Fatalf("go build failed: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func copyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
 }

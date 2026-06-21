@@ -10,8 +10,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/tetratelabs/wazero"
@@ -21,6 +24,9 @@ import (
 
 //go:embed wasm/exiftool.wasm
 var wasmFS embed.FS
+
+//go:embed exiftool_cli.pl
+var exiftoolCLI string
 
 const (
 	// asyncify constants
@@ -72,6 +78,10 @@ func New() (*ExifTool, error) {
 
 // NewWithContext creates a new ExifTool instance with the given context.
 func NewWithContext(ctx context.Context) (*ExifTool, error) {
+	return newWithContext(ctx, false, nil, nil)
+}
+
+func newWithContext(ctx context.Context, rootFS bool, extraMounts []string, stdin io.Reader) (*ExifTool, error) {
 	// Load wasm binary
 	wasmBytes, err := wasmFS.ReadFile("wasm/exiftool.wasm")
 	if err != nil {
@@ -122,14 +132,35 @@ func NewWithContext(ctx context.Context) (*ExifTool, error) {
 		return nil, fmt.Errorf("failed to create env module: %w", err)
 	}
 
+	fsConfig := wazero.NewFSConfig()
+	if rootFS {
+		cwd, err := os.Getwd()
+		if err != nil {
+			et.Close()
+			return nil, fmt.Errorf("failed to get working directory: %w", err)
+		}
+		fsConfig = fsConfig.
+			WithDirMount(cwd, "").
+			WithDirMount(tmpDir, "/exiftool-go").
+			WithDirMount(devDir, "/dev")
+		for _, mount := range extraMounts {
+			fsConfig = fsConfig.WithDirMount(mount, mount)
+		}
+	} else {
+		fsConfig = fsConfig.
+			WithDirMount(tmpDir, "/tmp").
+			WithDirMount(devDir, "/dev")
+	}
+
 	// Configure module with WASI settings
 	config := wazero.NewModuleConfig().
 		WithStdout(et.stdout).
 		WithStderr(et.stderr).
 		WithArgs("perl").
-		WithFSConfig(wazero.NewFSConfig().
-			WithDirMount(tmpDir, "/tmp").
-			WithDirMount(devDir, "/dev"))
+		WithFSConfig(fsConfig)
+	if stdin != nil {
+		config = config.WithStdin(stdin)
+	}
 
 	// Instantiate module
 	et.mod, err = et.runtime.InstantiateWithConfig(ctx, wasmBytes, config)
@@ -175,6 +206,143 @@ func NewWithContext(ctx context.Context) (*ExifTool, error) {
 	}
 
 	return et, nil
+}
+
+// RunCLI executes the bundled ExifTool command-line application with the given
+// arguments. It returns stdout, stderr and the ExifTool exit status.
+func RunCLI(args []string) (string, string, int, error) {
+	return RunCLIWithContext(context.Background(), args)
+}
+
+// RunCLIWithContext executes the bundled ExifTool command-line application.
+func RunCLIWithContext(ctx context.Context, args []string) (string, string, int, error) {
+	return RunCLIWithStdin(ctx, args, nil)
+}
+
+// RunCLIWithStdin executes the bundled ExifTool command-line application with stdin.
+func RunCLIWithStdin(ctx context.Context, args []string, stdin io.Reader) (string, string, int, error) {
+	et, err := newWithContext(ctx, true, collectCLIMounts(args), stdin)
+	if err != nil {
+		return "", "", 1, err
+	}
+	defer et.Close()
+
+	hostScriptPath := filepath.Join(et.tmpDir, "exiftool")
+	const guestScriptPath = "/exiftool-go/exiftool"
+	if err := os.WriteFile(hostScriptPath, []byte(exiftoolCLI), 0755); err != nil {
+		return "", "", 1, fmt.Errorf("failed to write exiftool cli script: %w", err)
+	}
+
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return "", "", 1, fmt.Errorf("failed to marshal arguments: %w", err)
+	}
+	scriptJSON, err := json.Marshal(guestScriptPath)
+	if err != nil {
+		return "", "", 1, fmt.Errorf("failed to marshal script path: %w", err)
+	}
+
+	code := fmt.Sprintf(`
+use JSON::PP;
+my $json = JSON::PP->new->utf8;
+my $args = $json->decode('%s');
+my $script = $json->decode('%s');
+@ARGV = @$args;
+$0 = $script;
+my $exit_code = 0;
+{
+    no warnings 'redefine';
+    local *CORE::GLOBAL::exit = sub {
+        my $code = shift;
+        $code = 0 unless defined $code;
+        die "__EXIFTOOL_GO_EXIT__$code\n";
+    };
+    my $ok = eval {
+        my $result = do $script;
+        die($@ || $!) unless defined $result;
+        1;
+    };
+    if (!$ok) {
+        my $err = $@;
+        if ($err =~ /^__EXIFTOOL_GO_EXIT__(\d+)/) {
+            $exit_code = $1;
+        } else {
+            print STDERR $err;
+            $exit_code = 1;
+        }
+    }
+}
+eval { require IO::Handle; STDOUT->flush(); STDERR->flush(); };
+print STDERR "\n__EXIFTOOL_GO_EXIT_CODE__=$exit_code\n";
+`, string(argsJSON), string(scriptJSON))
+
+	stdout, stderrMsg, err := et.eval(code)
+	if err != nil {
+		return stdout, stderrMsg, 1, err
+	}
+
+	exitCode := 0
+	const marker = "__EXIFTOOL_GO_EXIT_CODE__="
+	if idx := strings.LastIndex(stderrMsg, marker); idx >= 0 {
+		codeStart := idx + len(marker)
+		codeEnd := codeStart
+		for codeEnd < len(stderrMsg) && stderrMsg[codeEnd] >= '0' && stderrMsg[codeEnd] <= '9' {
+			codeEnd++
+		}
+		if parsed, parseErr := strconv.Atoi(stderrMsg[codeStart:codeEnd]); parseErr == nil {
+			exitCode = parsed
+		}
+		stderrMsg = strings.TrimRight(stderrMsg[:idx], "\r\n")
+	}
+
+	return stdout, stderrMsg, exitCode, nil
+}
+
+func collectCLIMounts(args []string) []string {
+	seen := make(map[string]bool)
+	var mounts []string
+	add := func(path string) {
+		if !filepath.IsAbs(path) {
+			return
+		}
+		mount := existingPathMount(path)
+		if mount == "" || seen[mount] {
+			return
+		}
+		seen[mount] = true
+		mounts = append(mounts, mount)
+	}
+
+	for _, arg := range args {
+		add(arg)
+		if idx := strings.Index(arg, "<="); idx >= 0 {
+			add(arg[idx+2:])
+		}
+		if idx := strings.Index(arg, "<"); idx >= 0 {
+			add(arg[idx+1:])
+		}
+		if idx := strings.Index(arg, "="); idx >= 0 {
+			add(arg[idx+1:])
+		}
+	}
+
+	return mounts
+}
+
+func existingPathMount(path string) string {
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return path
+		}
+		return filepath.Dir(path)
+	}
+	for dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return ""
 }
 
 // Close releases all resources.
