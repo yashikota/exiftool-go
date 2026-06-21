@@ -51,6 +51,20 @@ type ExifTool struct {
 	stopRewind  api.Function
 }
 
+// TagInfo is one extracted metadata value with optional group information.
+type TagInfo struct {
+	Name  string
+	Group string
+	Value any
+}
+
+// ReadOptions controls metadata extraction.
+type ReadOptions struct {
+	Tags       []string
+	Exclude    []string
+	Duplicates bool
+}
+
 // New creates a new ExifTool instance.
 func New() (*ExifTool, error) {
 	return NewWithContext(context.Background())
@@ -245,6 +259,21 @@ func (et *ExifTool) eval(code string) (string, string, error) {
 
 // ReadMetadata reads metadata from an image file.
 func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
+	tags, err := et.ReadMetadataTags(filePath, ReadOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]any, len(tags))
+	for _, tag := range tags {
+		result[tag.Name] = tag.Value
+	}
+
+	return result, nil
+}
+
+// ReadMetadataTags reads metadata from a file and returns tag information.
+func (et *ExifTool) ReadMetadataTags(filePath string, opts ReadOptions) ([]TagInfo, error) {
 	// Copy file to temp directory for WASI access
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -257,44 +286,86 @@ func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
 	}
 	defer os.Remove(tmpFile)
 
+	tagsJSON, err := json.Marshal(opts.Tags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	excludeJSON, err := json.Marshal(opts.Exclude)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal excluded tags: %w", err)
+	}
+	duplicates := 0
+	if opts.Duplicates {
+		duplicates = 1
+	}
+
 	// Execute Perl code to extract metadata
-	code := `
+	code := fmt.Sprintf(`
 use Image::ExifTool;
 use JSON::PP;
 my $et = Image::ExifTool->new;
-my $info = $et->ImageInfo('/tmp/input');
-my %result;
-foreach my $tag (keys %$info) {
-    my $val = $$info{$tag};
-    if (ref($val) eq 'SCALAR') {
-        $result{$tag} = '[binary data]';
-    } else {
-        $result{$tag} = $val;
-    }
+my $json = JSON::PP->new->utf8;
+my $tags = $json->decode('%s');
+my $exclude = $json->decode('%s');
+my %%exclude;
+foreach my $tag (@$exclude) {
+    $tag =~ s/^[-]+//;
+    $exclude{lc($tag)} = 1;
 }
-print JSON::PP->new->utf8->encode(\%result);
-`
+$et->Options(Duplicates => %d);
+my $info = @$tags ? $et->ImageInfo('/tmp/input', @$tags) : $et->ImageInfo('/tmp/input');
+my @result;
+foreach my $tag (sort keys %%$info) {
+    my $base = $tag;
+    $base =~ s/ \(\d+\)$//;
+    next if $exclude{lc($base)};
+    my $val = $$info{$tag};
+    my $out;
+    if (ref($val) eq 'SCALAR') {
+        $out = '[binary data]';
+    } else {
+        $out = $val;
+    }
+    push @result, {
+        Name => $tag,
+        Group => scalar($et->GetGroup($tag, 1)),
+        Value => $out,
+    };
+}
+print $json->encode(\@result);
+`, string(tagsJSON), string(excludeJSON), duplicates)
 	output, _, err := et.eval(code)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]any
+	var result []TagInfo
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w (output: %s)", err, output)
 	}
 
-	// Replace temp-path fields with the user-supplied path values
-	result["SourceFile"] = filePath
-	result["Directory"] = filepath.Dir(filePath)
-	result["FileName"] = filepath.Base(filePath)
+	if len(opts.Tags) == 0 {
+		result = replaceTagValue(result, "SourceFile", filePath)
+		result = replaceTagValue(result, "Directory", filepath.Dir(filePath))
+		result = replaceTagValue(result, "FileName", filepath.Base(filePath))
 
-	// Fix FilePermissions from the real file (sandbox always reports ----------)
-	if info, err := os.Stat(filePath); err == nil {
-		result["FilePermissions"] = formatFilePermissions(info.Mode())
+		// Fix FilePermissions from the real file (sandbox always reports ----------)
+		if info, err := os.Stat(filePath); err == nil {
+			result = replaceTagValue(result, "FilePermissions", formatFilePermissions(info.Mode()))
+		}
 	}
 
 	return result, nil
+}
+
+func replaceTagValue(tags []TagInfo, name string, value any) []TagInfo {
+	for i := range tags {
+		if tags[i].Name == name {
+			tags[i].Value = value
+			return tags
+		}
+	}
+	return append(tags, TagInfo{Name: name, Group: "File", Value: value})
 }
 
 // formatFilePermissions formats an os.FileMode into ExifTool's rwxrwxrwx style.
