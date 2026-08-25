@@ -30,10 +30,28 @@ exiftool-go photo.jpg
 
 # JSON output
 exiftool-go -json photo.jpg
+exiftool-go -j photo.jpg
 
 # Multiple files
 exiftool-go photo1.jpg photo2.jpg
+
+# ExifTool-compatible read options
+exiftool-go -ver
+exiftool-go -s -FileType photo.jpg
+exiftool-go -G -FileType photo.jpg
+exiftool-go -a photo.jpg
+
+# Write PDF metadata in place
+exiftool-go -Author="Test Author" -Title="Test Title" document.pdf
+
+# Write PDF metadata in place without creating a _original backup
+exiftool-go -overwrite_original -Author="Test Author" document.pdf
+
+# Write PDF metadata to a new file
+exiftool-go -o output.pdf -Author="Test Author" -Title="Test Title" document.pdf
 ```
+
+The CLI delegates to the bundled ExifTool application script, so ExifTool command-line options such as `-tagsFromFile`, `-r`, `-ext`, `-if`, `-execute`, `-stay_open`, `-TAG`, `--TAG`, and `-TAG=value` are handled by ExifTool itself.
 
 ## Library Usage
 
