@@ -29,10 +29,28 @@ exiftool-go photo.jpg
 
 # JSON出力
 exiftool-go -json photo.jpg
+exiftool-go -j photo.jpg
 
 # 複数ファイル
 exiftool-go photo1.jpg photo2.jpg
+
+# ExifTool互換の読み取りオプション
+exiftool-go -ver
+exiftool-go -s -FileType photo.jpg
+exiftool-go -G -FileType photo.jpg
+exiftool-go -a photo.jpg
+
+# PDFメタデータを書き込み（上書き）
+exiftool-go -Author="Test Author" -Title="Test Title" document.pdf
+
+# _originalバックアップを作らずPDFメタデータを書き込み
+exiftool-go -overwrite_original -Author="Test Author" document.pdf
+
+# PDFメタデータを別ファイルへ書き込み
+exiftool-go -o output.pdf -Author="Test Author" -Title="Test Title" document.pdf
 ```
+
+CLIは同梱したExifToolアプリケーションスクリプトへ委譲するため、`-tagsFromFile`、`-r`、`-ext`、`-if`、`-execute`、`-stay_open`、`-TAG`、`--TAG`、`-TAG=value` などのExifToolコマンドラインオプションはExifTool自身が処理します。
 
 ## ライブラリ使用方法
 

@@ -89,6 +89,20 @@ func TestVersion(t *testing.T) {
 	t.Logf("ExifTool version: %s", version)
 }
 
+func TestRunCLIVersion(t *testing.T) {
+	stdout, stderrMsg, exitCode, err := RunCLI([]string{"-ver"})
+	if err != nil {
+		t.Fatalf("RunCLI failed: %v", err)
+	}
+	t.Logf("stdout=%q stderr=%q exit=%d", stdout, stderrMsg, exitCode)
+	if exitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", exitCode)
+	}
+	if stdout == "" {
+		t.Fatal("stdout should contain version")
+	}
+}
+
 func TestReadMetadata(t *testing.T) {
 	et, err := New()
 	if err != nil {
