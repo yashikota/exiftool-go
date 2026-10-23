@@ -109,8 +109,8 @@ func TestGuestPathWindows(t *testing.T) {
 	if got := guestPath(`C:\Users\me\a.jpg`); got != "/C/Users/me/a.jpg" {
 		t.Errorf("guestPath = %q", got)
 	}
-	args := guestArgs([]string{`-Comment=C:\keep\this`, `-Artist<=C:\x\artist.txt`, `C:\photos\a.jpg`, "-ver"})
-	want := []string{`-Comment=C:\keep\this`, `-Artist<=/C/x/artist.txt`, "/C/photos/a.jpg", "-ver"}
+	args := guestArgs([]string{`-Comment=C:\keep\this`, `-Artist<=C:\x\artist.txt`, `C:\photos\a.jpg`, "-ver", `\`})
+	want := []string{`-Comment=C:\keep\this`, `-Artist<=/C/x/artist.txt`, "/C/photos/a.jpg", "-ver", `\`}
 	for i := range want {
 		if args[i] != want[i] {
 			t.Errorf("guestArgs[%d] = %q, want %q", i, args[i], want[i])

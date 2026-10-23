@@ -402,7 +402,9 @@ func isHostPath(arg string) bool {
 	if filepath.IsAbs(arg) {
 		return true
 	}
-	if !strings.Contains(arg, `\`) {
+	// Drive-relative paths such as \ or \dir are left alone: they are more
+	// likely to be plain values than files.
+	if !strings.Contains(arg, `\`) || strings.HasPrefix(arg, `\`) {
 		return false
 	}
 	_, err := os.Stat(arg)
