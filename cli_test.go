@@ -173,7 +173,8 @@ func assertPDF(t *testing.T, path string) {
 
 func TestCLIPaths(t *testing.T) {
 	tmpDir := t.TempDir()
-	dir := filepath.Join(tmpDir, "it's a \"dir\" 日本")
+	// Double quotes are not allowed in Windows file names.
+	dir := filepath.Join(tmpDir, "it's a dir 日本")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
