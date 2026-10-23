@@ -1,0 +1,4 @@
+# Test fixtures must keep their exact bytes; CRLF conversion breaks PDF xref offsets.
+*.pdf binary
+*.jpg binary
+*.wasm binary
