@@ -11,8 +11,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -23,6 +26,9 @@ import (
 
 //go:embed wasm/exiftool.wasm
 var wasmFS embed.FS
+
+//go:embed exiftool_cli.pl
+var exiftoolCLI string
 
 const (
 	// asyncify constants
@@ -53,6 +59,20 @@ type ExifTool struct {
 	stopRewind  api.Function
 }
 
+// TagInfo is one extracted metadata value with optional group information.
+type TagInfo struct {
+	Name  string
+	Group string
+	Value any
+}
+
+// ReadOptions controls metadata extraction.
+type ReadOptions struct {
+	Tags       []string
+	Exclude    []string
+	Duplicates bool
+}
+
 // New creates a new ExifTool instance.
 func New() (*ExifTool, error) {
 	return NewWithContext(context.Background())
@@ -60,6 +80,19 @@ func New() (*ExifTool, error) {
 
 // NewWithContext creates a new ExifTool instance with the given context.
 func NewWithContext(ctx context.Context) (*ExifTool, error) {
+	return newWithContext(ctx, nil)
+}
+
+// cliConfig configures an instance that runs the ExifTool command-line
+// application against the host filesystem.
+type cliConfig struct {
+	mounts []string
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func newWithContext(ctx context.Context, cli *cliConfig) (*ExifTool, error) {
 	// Load wasm binary
 	wasmBytes, err := wasmFS.ReadFile("wasm/exiftool.wasm")
 	if err != nil {
@@ -110,14 +143,42 @@ func NewWithContext(ctx context.Context) (*ExifTool, error) {
 		return nil, fmt.Errorf("failed to create env module: %w", err)
 	}
 
+	fsConfig := wazero.NewFSConfig()
+	var stdout, stderr io.Writer = et.stdout, et.stderr
+	if cli != nil {
+		cwd, err := os.Getwd()
+		if err != nil {
+			et.Close()
+			return nil, fmt.Errorf("failed to get working directory: %w", err)
+		}
+		fsConfig = fsConfig.
+			WithDirMount(cwd, "").
+			WithDirMount(tmpDir, "/exiftool-go").
+			WithDirMount(devDir, "/dev")
+		for _, mount := range cli.mounts {
+			fsConfig = fsConfig.WithDirMount(mount, guestPath(mount))
+		}
+		if cli.stdout != nil {
+			stdout = cli.stdout
+		}
+		if cli.stderr != nil {
+			stderr = cli.stderr
+		}
+	} else {
+		fsConfig = fsConfig.
+			WithDirMount(tmpDir, "/tmp").
+			WithDirMount(devDir, "/dev")
+	}
+
 	// Configure module with WASI settings
 	config := wazero.NewModuleConfig().
-		WithStdout(et.stdout).
-		WithStderr(et.stderr).
+		WithStdout(stdout).
+		WithStderr(stderr).
 		WithArgs("perl").
-		WithFSConfig(wazero.NewFSConfig().
-			WithDirMount(tmpDir, "/tmp").
-			WithDirMount(devDir, "/dev"))
+		WithFSConfig(fsConfig)
+	if cli != nil && cli.stdin != nil {
+		config = config.WithStdin(cli.stdin)
+	}
 
 	// Instantiate module
 	et.mod, err = et.runtime.InstantiateWithConfig(ctx, wasmBytes, config)
@@ -163,6 +224,207 @@ func NewWithContext(ctx context.Context) (*ExifTool, error) {
 	}
 
 	return et, nil
+}
+
+// RunCLI executes the bundled ExifTool command-line application with the given
+// arguments. It returns stdout, stderr and the ExifTool exit status.
+func RunCLI(args []string) (string, string, int, error) {
+	return RunCLIWithContext(context.Background(), args)
+}
+
+// RunCLIWithContext executes the bundled ExifTool command-line application.
+func RunCLIWithContext(ctx context.Context, args []string) (string, string, int, error) {
+	return RunCLIWithStdin(ctx, args, nil)
+}
+
+// RunCLIWithStdin executes the bundled ExifTool command-line application with stdin.
+func RunCLIWithStdin(ctx context.Context, args []string, stdin io.Reader) (string, string, int, error) {
+	var stdout, stderr bytes.Buffer
+	exitCode, err := RunCLIWithIO(ctx, args, stdin, &stdout, &stderr)
+	return stdout.String(), stderr.String(), exitCode, err
+}
+
+// RunCLIWithIO executes the bundled ExifTool command-line application,
+// streaming its output to stdout and stderr as it runs. This is what makes
+// interactive modes such as -stay_open work. It returns the ExifTool exit status.
+func RunCLIWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	et, err := newWithContext(ctx, &cliConfig{
+		mounts: collectCLIMounts(args),
+		stdin:  stdin,
+		stdout: stdout,
+		stderr: stderr,
+	})
+	if err != nil {
+		return 1, err
+	}
+	defer et.Close()
+
+	hostScriptPath := filepath.Join(et.tmpDir, "exiftool")
+	const guestScriptPath = "/exiftool-go/exiftool"
+	const guestExitPath = "/exiftool-go/exit_code"
+	if err := os.WriteFile(hostScriptPath, []byte(exiftoolCLI), 0755); err != nil {
+		return 1, fmt.Errorf("failed to write exiftool cli script: %w", err)
+	}
+
+	argsJSON, err := json.Marshal(guestArgs(args))
+	if err != nil {
+		return 1, fmt.Errorf("failed to marshal arguments: %w", err)
+	}
+
+	// Arguments are passed hex-encoded so that quotes, backslashes (Windows
+	// paths) and non-ASCII characters reach ExifTool unchanged, as UTF-8 bytes
+	// like a native command line. The exit status is written to a file so that
+	// stdout and stderr can stream untouched.
+	code := fmt.Sprintf(`
+use JSON::PP;
+my $args = JSON::PP->new->utf8->decode(%s);
+utf8::encode($_) for @$args;
+@ARGV = @$args;
+my $script = %q;
+$0 = $script;
+my $exit_code = 0;
+{
+    no warnings 'redefine';
+    local *CORE::GLOBAL::exit = sub {
+        my $code = shift;
+        $code = 0 unless defined $code;
+        die "__EXIFTOOL_GO_EXIT__$code\n";
+    };
+    my $ok = eval {
+        my $result = do $script;
+        die($@ || $!) unless defined $result;
+        1;
+    };
+    if (!$ok) {
+        my $err = $@;
+        if ($err =~ /^__EXIFTOOL_GO_EXIT__(-?\d+)/) {
+            $exit_code = $1;
+        } else {
+            print STDERR $err;
+            $exit_code = 1;
+        }
+    }
+}
+eval { require IO::Handle; STDOUT->flush(); STDERR->flush(); };
+open(my $fh, ">", %q) or die "cannot write exit status: $!"; print $fh $exit_code; close $fh;
+`, perlBytes(argsJSON), guestScriptPath, guestExitPath)
+
+	if _, _, err := et.eval(code); err != nil {
+		return 1, err
+	}
+
+	// A missing exit status means the wrapper itself failed before finishing.
+	data, err := os.ReadFile(filepath.Join(et.tmpDir, "exit_code"))
+	if err != nil {
+		return 1, nil
+	}
+	exitCode, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 1, nil
+	}
+	return exitCode, nil
+}
+
+func collectCLIMounts(args []string) []string {
+	seen := make(map[string]bool)
+	var mounts []string
+	add := func(path string) {
+		if !filepath.IsAbs(path) {
+			return
+		}
+		mount := existingPathMount(path)
+		// The working directory is already mounted at the guest root.
+		if mount == "" || guestPath(mount) == "/" || seen[mount] {
+			return
+		}
+		seen[mount] = true
+		mounts = append(mounts, mount)
+	}
+
+	for _, arg := range args {
+		add(arg)
+		if idx := strings.Index(arg, "<="); idx >= 0 {
+			add(arg[idx+2:])
+		}
+		if idx := strings.Index(arg, "<"); idx >= 0 {
+			add(arg[idx+1:])
+		}
+		if idx := strings.Index(arg, "="); idx >= 0 {
+			add(arg[idx+1:])
+		}
+	}
+
+	return mounts
+}
+
+// guestPath converts a host path to the path it is mounted at in the guest.
+// Unix paths are used as is. On Windows, C:\dir\file becomes /C/dir/file,
+// since Perl inside the guest only understands forward slashes.
+func guestPath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	vol := filepath.VolumeName(path)
+	rest := filepath.ToSlash(path[len(vol):])
+	if len(vol) == 2 && vol[1] == ':' {
+		return "/" + vol[:1] + rest
+	}
+	return rest
+}
+
+// guestArgs rewrites Windows file path arguments to their guest paths.
+// Only standalone arguments and -TAG<=FILE sources that point into the host
+// filesystem are rewritten, so tag values such as -Comment=C:\x stay intact.
+func guestArgs(args []string) []string {
+	if runtime.GOOS != "windows" {
+		return args
+	}
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = arg
+		if strings.HasPrefix(arg, "-") {
+			if idx := strings.Index(arg, "<="); idx >= 0 && isHostPath(arg[idx+2:]) {
+				out[i] = arg[:idx+2] + guestPath(arg[idx+2:])
+			}
+			continue
+		}
+		if isHostPath(arg) {
+			out[i] = guestPath(arg)
+		}
+	}
+	return out
+}
+
+// isHostPath reports whether arg looks like a Windows path that the guest
+// needs translated: an absolute path, or a relative path with backslashes
+// that exists.
+func isHostPath(arg string) bool {
+	if filepath.IsAbs(arg) {
+		return true
+	}
+	// Drive-relative paths such as \ or \dir are left alone: they are more
+	// likely to be plain values than files.
+	if !strings.Contains(arg, `\`) || strings.HasPrefix(arg, `\`) {
+		return false
+	}
+	_, err := os.Stat(arg)
+	return err == nil
+}
+
+func existingPathMount(path string) string {
+	path = filepath.Clean(path)
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return path
+		}
+		return filepath.Dir(path)
+	}
+	for dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return ""
 }
 
 // Close releases all resources.
@@ -253,6 +515,22 @@ func perlBytes(b []byte) string {
 
 // ReadMetadata reads metadata from an image file.
 func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
+	// Keep ExifTool's default of returning duplicate tags as "Tag (1)".
+	tags, err := et.ReadMetadataTags(filePath, ReadOptions{Duplicates: true})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]any, len(tags))
+	for _, tag := range tags {
+		result[tag.Name] = tag.Value
+	}
+
+	return result, nil
+}
+
+// ReadMetadataTags reads metadata from a file and returns tag information.
+func (et *ExifTool) ReadMetadataTags(filePath string, opts ReadOptions) ([]TagInfo, error) {
 	et.mu.Lock()
 	defer et.mu.Unlock()
 
@@ -268,46 +546,95 @@ func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
 	}
 	defer os.Remove(tmpFile)
 
+	if opts.Tags == nil {
+		opts.Tags = []string{}
+	}
+	if opts.Exclude == nil {
+		opts.Exclude = []string{}
+	}
+	tagsJSON, err := json.Marshal(opts.Tags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tags: %w", err)
+	}
+	excludeJSON, err := json.Marshal(opts.Exclude)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal excluded tags: %w", err)
+	}
+	duplicates := 0
+	if opts.Duplicates {
+		duplicates = 1
+	}
+
 	// Execute Perl code to extract metadata
-	code := `
+	code := fmt.Sprintf(`
 use Image::ExifTool;
 use JSON::PP;
 my $et = Image::ExifTool->new;
-my $info = $et->ImageInfo('/tmp/input');
-my %result;
-foreach my $tag (keys %$info) {
+my $json = JSON::PP->new->utf8;
+my $tags = $json->decode(%s);
+my $exclude = $json->decode(%s);
+utf8::encode($_) for @$tags, @$exclude;
+my %%exclude;
+foreach my $tag (@$exclude) {
+    $tag =~ s/^[-]+//;
+    $exclude{lc($tag)} = 1;
+}
+$et->Options(Duplicates => %d);
+my $info = @$tags ? $et->ImageInfo('/tmp/input', @$tags) : $et->ImageInfo('/tmp/input');
+my @result;
+foreach my $tag (sort keys %%$info) {
+    my $base = $tag;
+    $base =~ s/ \(\d+\)$//;
+    next if $exclude{lc($base)};
     my $val = $$info{$tag};
+    my $out;
     if (ref($val) eq 'SCALAR') {
-        $result{$tag} = '[binary data]';
+        $out = '[binary data]';
     } else {
-        $result{$tag} = $val;
+        $out = $val;
     }
+    push @result, {
+        Name => $tag,
+        Group => scalar($et->GetGroup($tag, 1)),
+        Value => $out,
+    };
 }
 # ExifTool returns UTF-8 byte strings, so encode without the utf8 flag to
 # avoid double-encoding non-ASCII values.
-print JSON::PP->new->canonical->encode(\%result);
-`
+print JSON::PP->new->encode(\@result);
+`, perlBytes(tagsJSON), perlBytes(excludeJSON), duplicates)
 	output, _, err := et.eval(code)
 	if err != nil {
 		return nil, err
 	}
 
-	var result map[string]any
+	var result []TagInfo
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w (output: %s)", err, output)
 	}
 
-	// Replace temp-path fields with the user-supplied path values
-	result["SourceFile"] = filePath
-	result["Directory"] = filepath.Dir(filePath)
-	result["FileName"] = filepath.Base(filePath)
+	if len(opts.Tags) == 0 {
+		result = replaceTagValue(result, "SourceFile", filePath)
+		result = replaceTagValue(result, "Directory", filepath.Dir(filePath))
+		result = replaceTagValue(result, "FileName", filepath.Base(filePath))
 
-	// Fix FilePermissions from the real file (sandbox always reports ----------)
-	if info, err := os.Stat(filePath); err == nil {
-		result["FilePermissions"] = formatFilePermissions(info.Mode())
+		// Fix FilePermissions from the real file (sandbox always reports ----------)
+		if info, err := os.Stat(filePath); err == nil {
+			result = replaceTagValue(result, "FilePermissions", formatFilePermissions(info.Mode()))
+		}
 	}
 
 	return result, nil
+}
+
+func replaceTagValue(tags []TagInfo, name string, value any) []TagInfo {
+	for i := range tags {
+		if tags[i].Name == name {
+			tags[i].Value = value
+			return tags
+		}
+	}
+	return append(tags, TagInfo{Name: name, Group: "File", Value: value})
 }
 
 // formatFilePermissions formats an os.FileMode into ExifTool's rwxrwxrwx style.
