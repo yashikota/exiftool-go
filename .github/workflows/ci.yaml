@@ -31,8 +31,12 @@ jobs:
       - name: Run tests
         run: go test -v -race ./... -timeout 30m
 
-  test-windows:
-    runs-on: windows-latest
+  test-os:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
