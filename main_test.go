@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -122,14 +124,30 @@ func TestCLIArgfileFromStdin(t *testing.T) {
 	}
 }
 
+var (
+	buildOnce sync.Once
+	builtBin  string
+	buildErr  error
+)
+
+// buildCLI builds the exiftool-go binary once per test run.
 func buildCLI(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "exiftool-go")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build failed: %v\n%s", err, out)
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "exiftool-go-bin-*")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		builtBin = filepath.Join(dir, "exiftool-go")
+		if out, err := exec.Command("go", "build", "-o", builtBin, ".").CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("go build failed: %v\n%s", err, out)
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	return bin
+	return builtBin
 }
 
 func copyFile(t *testing.T, src, dst string) {

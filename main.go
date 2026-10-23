@@ -9,16 +9,7 @@ import (
 )
 
 func main() {
-	stdout, stderr, exitCode, err := exiftool.RunCLIWithStdin(context.Background(), os.Args[1:], os.Stdin)
-	if stdout != "" {
-		fmt.Fprint(os.Stdout, stdout)
-	}
-	if stderr != "" {
-		fmt.Fprint(os.Stderr, stderr)
-		if stderr[len(stderr)-1] != '\n' {
-			fmt.Fprintln(os.Stderr)
-		}
-	}
+	exitCode, err := exiftool.RunCLIWithIO(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

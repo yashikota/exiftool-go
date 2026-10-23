@@ -79,10 +79,19 @@ func New() (*ExifTool, error) {
 
 // NewWithContext creates a new ExifTool instance with the given context.
 func NewWithContext(ctx context.Context) (*ExifTool, error) {
-	return newWithContext(ctx, false, nil, nil)
+	return newWithContext(ctx, nil)
 }
 
-func newWithContext(ctx context.Context, rootFS bool, extraMounts []string, stdin io.Reader) (*ExifTool, error) {
+// cliConfig configures an instance that runs the ExifTool command-line
+// application against the host filesystem.
+type cliConfig struct {
+	mounts []string
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func newWithContext(ctx context.Context, cli *cliConfig) (*ExifTool, error) {
 	// Load wasm binary
 	wasmBytes, err := wasmFS.ReadFile("wasm/exiftool.wasm")
 	if err != nil {
@@ -134,7 +143,8 @@ func newWithContext(ctx context.Context, rootFS bool, extraMounts []string, stdi
 	}
 
 	fsConfig := wazero.NewFSConfig()
-	if rootFS {
+	var stdout, stderr io.Writer = et.stdout, et.stderr
+	if cli != nil {
 		cwd, err := os.Getwd()
 		if err != nil {
 			et.Close()
@@ -144,8 +154,14 @@ func newWithContext(ctx context.Context, rootFS bool, extraMounts []string, stdi
 			WithDirMount(cwd, "").
 			WithDirMount(tmpDir, "/exiftool-go").
 			WithDirMount(devDir, "/dev")
-		for _, mount := range extraMounts {
+		for _, mount := range cli.mounts {
 			fsConfig = fsConfig.WithDirMount(mount, mount)
+		}
+		if cli.stdout != nil {
+			stdout = cli.stdout
+		}
+		if cli.stderr != nil {
+			stderr = cli.stderr
 		}
 	} else {
 		fsConfig = fsConfig.
@@ -155,12 +171,12 @@ func newWithContext(ctx context.Context, rootFS bool, extraMounts []string, stdi
 
 	// Configure module with WASI settings
 	config := wazero.NewModuleConfig().
-		WithStdout(et.stdout).
-		WithStderr(et.stderr).
+		WithStdout(stdout).
+		WithStderr(stderr).
 		WithArgs("perl").
 		WithFSConfig(fsConfig)
-	if stdin != nil {
-		config = config.WithStdin(stdin)
+	if cli != nil && cli.stdin != nil {
+		config = config.WithStdin(cli.stdin)
 	}
 
 	// Instantiate module
@@ -222,33 +238,48 @@ func RunCLIWithContext(ctx context.Context, args []string) (string, string, int,
 
 // RunCLIWithStdin executes the bundled ExifTool command-line application with stdin.
 func RunCLIWithStdin(ctx context.Context, args []string, stdin io.Reader) (string, string, int, error) {
-	et, err := newWithContext(ctx, true, collectCLIMounts(args), stdin)
+	var stdout, stderr bytes.Buffer
+	exitCode, err := RunCLIWithIO(ctx, args, stdin, &stdout, &stderr)
+	return stdout.String(), stderr.String(), exitCode, err
+}
+
+// RunCLIWithIO executes the bundled ExifTool command-line application,
+// streaming its output to stdout and stderr as it runs. This is what makes
+// interactive modes such as -stay_open work. It returns the ExifTool exit status.
+func RunCLIWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	et, err := newWithContext(ctx, &cliConfig{
+		mounts: collectCLIMounts(args),
+		stdin:  stdin,
+		stdout: stdout,
+		stderr: stderr,
+	})
 	if err != nil {
-		return "", "", 1, err
+		return 1, err
 	}
 	defer et.Close()
 
 	hostScriptPath := filepath.Join(et.tmpDir, "exiftool")
 	const guestScriptPath = "/exiftool-go/exiftool"
+	const guestExitPath = "/exiftool-go/exit_code"
 	if err := os.WriteFile(hostScriptPath, []byte(exiftoolCLI), 0755); err != nil {
-		return "", "", 1, fmt.Errorf("failed to write exiftool cli script: %w", err)
+		return 1, fmt.Errorf("failed to write exiftool cli script: %w", err)
 	}
 
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return "", "", 1, fmt.Errorf("failed to marshal arguments: %w", err)
-	}
-	scriptJSON, err := json.Marshal(guestScriptPath)
-	if err != nil {
-		return "", "", 1, fmt.Errorf("failed to marshal script path: %w", err)
+		return 1, fmt.Errorf("failed to marshal arguments: %w", err)
 	}
 
+	// Arguments are passed hex-encoded so that quotes, backslashes (Windows
+	// paths) and non-ASCII characters reach ExifTool unchanged, as UTF-8 bytes
+	// like a native command line. The exit status is written to a file so that
+	// stdout and stderr can stream untouched.
 	code := fmt.Sprintf(`
 use JSON::PP;
-my $json = JSON::PP->new->utf8;
-my $args = $json->decode('%s');
-my $script = $json->decode('%s');
+my $args = JSON::PP->new->utf8->decode(%s);
+utf8::encode($_) for @$args;
 @ARGV = @$args;
+my $script = %q;
 $0 = $script;
 my $exit_code = 0;
 {
@@ -265,7 +296,7 @@ my $exit_code = 0;
     };
     if (!$ok) {
         my $err = $@;
-        if ($err =~ /^__EXIFTOOL_GO_EXIT__(\d+)/) {
+        if ($err =~ /^__EXIFTOOL_GO_EXIT__(-?\d+)/) {
             $exit_code = $1;
         } else {
             print STDERR $err;
@@ -274,29 +305,23 @@ my $exit_code = 0;
     }
 }
 eval { require IO::Handle; STDOUT->flush(); STDERR->flush(); };
-print STDERR "\n__EXIFTOOL_GO_EXIT_CODE__=$exit_code\n";
-`, string(argsJSON), string(scriptJSON))
+open(my $fh, ">", %q) or die "cannot write exit status: $!"; print $fh $exit_code; close $fh;
+`, perlBytes(argsJSON), guestScriptPath, guestExitPath)
 
-	stdout, stderrMsg, err := et.eval(code)
+	if _, _, err := et.eval(code); err != nil {
+		return 1, err
+	}
+
+	// A missing exit status means the wrapper itself failed before finishing.
+	data, err := os.ReadFile(filepath.Join(et.tmpDir, "exit_code"))
 	if err != nil {
-		return stdout, stderrMsg, 1, err
+		return 1, nil
 	}
-
-	exitCode := 0
-	const marker = "__EXIFTOOL_GO_EXIT_CODE__="
-	if idx := strings.LastIndex(stderrMsg, marker); idx >= 0 {
-		codeStart := idx + len(marker)
-		codeEnd := codeStart
-		for codeEnd < len(stderrMsg) && stderrMsg[codeEnd] >= '0' && stderrMsg[codeEnd] <= '9' {
-			codeEnd++
-		}
-		if parsed, parseErr := strconv.Atoi(stderrMsg[codeStart:codeEnd]); parseErr == nil {
-			exitCode = parsed
-		}
-		stderrMsg = strings.TrimRight(stderrMsg[:idx], "\r\n")
+	exitCode, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 1, nil
 	}
-
-	return stdout, stderrMsg, exitCode, nil
+	return exitCode, nil
 }
 
 func collectCLIMounts(args []string) []string {
@@ -307,7 +332,8 @@ func collectCLIMounts(args []string) []string {
 			return
 		}
 		mount := existingPathMount(path)
-		if mount == "" || seen[mount] {
+		// The working directory is already mounted at the guest root.
+		if mount == "" || mount == string(filepath.Separator) || seen[mount] {
 			return
 		}
 		seen[mount] = true
