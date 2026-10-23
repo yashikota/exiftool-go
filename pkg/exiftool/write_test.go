@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -325,6 +326,9 @@ func TestWriteMetadataRecoversAfterFailure(t *testing.T) {
 }
 
 func TestWriteMetadataPreservesPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
 	et := shared(t)
 	src := copyTestdata(t, "test.jpg")
 	if err := os.Chmod(src, 0600); err != nil {
@@ -374,7 +378,8 @@ func TestReadMetadataNonASCII(t *testing.T) {
 
 func TestReadMetadataSpecialPath(t *testing.T) {
 	et := shared(t)
-	dir := filepath.Join(t.TempDir(), "it's a \"dir\" 日本")
+	// Double quotes are not allowed in Windows file names.
+	dir := filepath.Join(t.TempDir(), "it's a dir 日本")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}

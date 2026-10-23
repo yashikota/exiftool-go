@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -480,6 +481,9 @@ func TestReadMetadataGolden(t *testing.T) {
 // TestReadMetadataFilePermissions verifies that FilePermissions reflects the
 // real file's mode, not the hardcoded temp-file permissions used in the sandbox.
 func TestReadMetadataFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permission bits")
+	}
 	et, err := New()
 	if err != nil {
 		t.Fatalf("Failed to create ExifTool: %v", err)
