@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -140,6 +141,9 @@ func buildCLI(t *testing.T) string {
 			return
 		}
 		builtBin = filepath.Join(dir, "exiftool-go")
+		if runtime.GOOS == "windows" {
+			builtBin += ".exe"
+		}
 		if out, err := exec.Command("go", "build", "-o", builtBin, ".").CombinedOutput(); err != nil {
 			buildErr = fmt.Errorf("go build failed: %v\n%s", err, out)
 		}
