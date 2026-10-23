@@ -8,6 +8,7 @@ import (
 	"context"
 	"embed"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -390,10 +391,9 @@ func (et *ExifTool) callWithAsyncify(fn api.Function, args ...uint64) ([]uint64,
 }
 
 // eval executes Perl code and returns stdout and stderr.
+// Callers must hold et.mu, since the Perl interpreter and the temp files it
+// works on are shared by the whole instance.
 func (et *ExifTool) eval(code string) (string, string, error) {
-	et.mu.Lock()
-	defer et.mu.Unlock()
-
 	et.stdout.Reset()
 	et.stderr.Reset()
 
@@ -425,9 +425,17 @@ func (et *ExifTool) eval(code string) (string, string, error) {
 	return et.stdout.String(), et.stderr.String(), nil
 }
 
+// perlBytes returns a Perl expression that evaluates to the given bytes.
+// Data is hex-encoded so that quotes, backslashes and non-ASCII characters
+// can never break out of the generated Perl code.
+func perlBytes(b []byte) string {
+	return `pack("H*", "` + hex.EncodeToString(b) + `")`
+}
+
 // ReadMetadata reads metadata from an image file.
 func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
-	tags, err := et.ReadMetadataTags(filePath, ReadOptions{})
+	// Keep ExifTool's default of returning duplicate tags as "Tag (1)".
+	tags, err := et.ReadMetadataTags(filePath, ReadOptions{Duplicates: true})
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +450,9 @@ func (et *ExifTool) ReadMetadata(filePath string) (map[string]any, error) {
 
 // ReadMetadataTags reads metadata from a file and returns tag information.
 func (et *ExifTool) ReadMetadataTags(filePath string, opts ReadOptions) ([]TagInfo, error) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
 	// Copy file to temp directory for WASI access
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -454,6 +465,12 @@ func (et *ExifTool) ReadMetadataTags(filePath string, opts ReadOptions) ([]TagIn
 	}
 	defer os.Remove(tmpFile)
 
+	if opts.Tags == nil {
+		opts.Tags = []string{}
+	}
+	if opts.Exclude == nil {
+		opts.Exclude = []string{}
+	}
 	tagsJSON, err := json.Marshal(opts.Tags)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal tags: %w", err)
@@ -473,8 +490,9 @@ use Image::ExifTool;
 use JSON::PP;
 my $et = Image::ExifTool->new;
 my $json = JSON::PP->new->utf8;
-my $tags = $json->decode('%s');
-my $exclude = $json->decode('%s');
+my $tags = $json->decode(%s);
+my $exclude = $json->decode(%s);
+utf8::encode($_) for @$tags, @$exclude;
 my %%exclude;
 foreach my $tag (@$exclude) {
     $tag =~ s/^[-]+//;
@@ -500,8 +518,10 @@ foreach my $tag (sort keys %%$info) {
         Value => $out,
     };
 }
-print $json->encode(\@result);
-`, string(tagsJSON), string(excludeJSON), duplicates)
+# ExifTool returns UTF-8 byte strings, so encode without the utf8 flag to
+# avoid double-encoding non-ASCII values.
+print JSON::PP->new->encode(\@result);
+`, perlBytes(tagsJSON), perlBytes(excludeJSON), duplicates)
 	output, _, err := et.eval(code)
 	if err != nil {
 		return nil, err
@@ -550,6 +570,9 @@ func formatFilePermissions(mode os.FileMode) string {
 
 // Version returns the ExifTool version.
 func (et *ExifTool) Version() (string, error) {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
 	code := "use Image::ExifTool; print Image::ExifTool->VERSION;"
 	output, _, err := et.eval(code)
 	return output, err
@@ -558,6 +581,9 @@ func (et *ExifTool) Version() (string, error) {
 // WriteMetadata writes multiple tags to an image file.
 // If dstPath is empty, the source file is modified in place.
 func (et *ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[string]any) error {
+	et.mu.Lock()
+	defer et.mu.Unlock()
+
 	// Read source file
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -571,6 +597,12 @@ func (et *ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[strin
 	}
 	defer os.Remove(tmpInput)
 
+	// ExifTool refuses to overwrite an existing output file, so clear any
+	// leftover from a previous failed write.
+	tmpOutput := et.tmpDir + "/output"
+	os.Remove(tmpOutput)
+	defer os.Remove(tmpOutput)
+
 	// Convert tags to JSON
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
@@ -581,14 +613,34 @@ func (et *ExifTool) WriteMetadata(srcPath string, dstPath string, tags map[strin
 	code := fmt.Sprintf(`
 use Image::ExifTool;
 use JSON::PP;
-my $et = Image::ExifTool->new;
-my $tags = JSON::PP->new->utf8->decode('%s');
-foreach my $tag (keys %%$tags) {
-    $et->SetNewValue($tag, $tags->{$tag});
+# Convert decoded character strings back to UTF-8 bytes, which ExifTool expects.
+sub to_bytes {
+    my $v = shift;
+    if (ref $v eq 'ARRAY') { return [ map { to_bytes($_) } @$v ]; }
+    if (ref $v eq 'HASH') { return { map { to_bytes($_) => to_bytes($v->{$_}) } keys %%$v }; }
+    if (ref $v) { return $$v ? 1 : 0; }
+    utf8::encode($v) if defined $v and utf8::is_utf8($v);
+    return $v;
 }
-my $result = $et->WriteInfo('/tmp/input', '/tmp/output');
-print $result;
-`, string(tagsJSON))
+my $et = Image::ExifTool->new;
+my $tags = to_bytes(JSON::PP->new->utf8->decode(%s));
+my @errors;
+foreach my $tag (sort keys %%$tags) {
+    my ($num, $err) = $et->SetNewValue($tag, $tags->{$tag});
+    push @errors, $err if $err;
+}
+if (@errors) {
+    print STDERR join("\n", @errors);
+    print 0;
+} else {
+    my $result = $et->WriteInfo('/tmp/input', '/tmp/output');
+    if (!$result) {
+        my $err = $et->GetValue('Error');
+        print STDERR $err if defined $err;
+    }
+    print $result;
+}
+`, perlBytes(tagsJSON))
 
 	output, stderrMsg, err := et.eval(code)
 	if err != nil {
@@ -598,19 +650,17 @@ print $result;
 	// Check result: 1=success, 2=success with warnings, 0=failure
 	// Empty output means Perl died (e.g. missing XS module) without producing a result.
 	if output == "0" || output == "" {
-		if stderrMsg != "" {
+		if stderrMsg = strings.TrimSpace(stderrMsg); stderrMsg != "" {
 			return fmt.Errorf("exiftool write failed: %s", stderrMsg)
 		}
 		return fmt.Errorf("exiftool write failed")
 	}
 
 	// Read output file
-	tmpOutput := et.tmpDir + "/output"
 	outputData, err := os.ReadFile(tmpOutput)
 	if err != nil {
 		return fmt.Errorf("failed to read output file: %w", err)
 	}
-	defer os.Remove(tmpOutput)
 	if len(outputData) == 0 {
 		return fmt.Errorf("exiftool write produced empty output")
 	}
@@ -621,8 +671,14 @@ print $result;
 		dest = srcPath
 	}
 
+	// Preserve the source file's permissions on the destination
+	perm := os.FileMode(0644)
+	if info, err := os.Stat(srcPath); err == nil {
+		perm = info.Mode().Perm()
+	}
+
 	// Write to destination
-	if err := os.WriteFile(dest, outputData, 0644); err != nil {
+	if err := os.WriteFile(dest, outputData, perm); err != nil {
 		return fmt.Errorf("failed to write destination file: %w", err)
 	}
 
