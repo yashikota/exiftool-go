@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -155,7 +156,7 @@ func newWithContext(ctx context.Context, cli *cliConfig) (*ExifTool, error) {
 			WithDirMount(tmpDir, "/exiftool-go").
 			WithDirMount(devDir, "/dev")
 		for _, mount := range cli.mounts {
-			fsConfig = fsConfig.WithDirMount(mount, mount)
+			fsConfig = fsConfig.WithDirMount(mount, guestPath(mount))
 		}
 		if cli.stdout != nil {
 			stdout = cli.stdout
@@ -265,7 +266,7 @@ func RunCLIWithIO(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return 1, fmt.Errorf("failed to write exiftool cli script: %w", err)
 	}
 
-	argsJSON, err := json.Marshal(args)
+	argsJSON, err := json.Marshal(guestArgs(args))
 	if err != nil {
 		return 1, fmt.Errorf("failed to marshal arguments: %w", err)
 	}
@@ -333,7 +334,7 @@ func collectCLIMounts(args []string) []string {
 		}
 		mount := existingPathMount(path)
 		// The working directory is already mounted at the guest root.
-		if mount == "" || mount == string(filepath.Separator) || seen[mount] {
+		if mount == "" || guestPath(mount) == "/" || seen[mount] {
 			return
 		}
 		seen[mount] = true
@@ -354,6 +355,58 @@ func collectCLIMounts(args []string) []string {
 	}
 
 	return mounts
+}
+
+// guestPath converts a host path to the path it is mounted at in the guest.
+// Unix paths are used as is. On Windows, C:\dir\file becomes /C/dir/file,
+// since Perl inside the guest only understands forward slashes.
+func guestPath(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	vol := filepath.VolumeName(path)
+	rest := filepath.ToSlash(path[len(vol):])
+	if len(vol) == 2 && vol[1] == ':' {
+		return "/" + vol[:1] + rest
+	}
+	return rest
+}
+
+// guestArgs rewrites Windows file path arguments to their guest paths.
+// Only standalone arguments and -TAG<=FILE sources that point into the host
+// filesystem are rewritten, so tag values such as -Comment=C:\x stay intact.
+func guestArgs(args []string) []string {
+	if runtime.GOOS != "windows" {
+		return args
+	}
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = arg
+		if strings.HasPrefix(arg, "-") {
+			if idx := strings.Index(arg, "<="); idx >= 0 && isHostPath(arg[idx+2:]) {
+				out[i] = arg[:idx+2] + guestPath(arg[idx+2:])
+			}
+			continue
+		}
+		if isHostPath(arg) {
+			out[i] = guestPath(arg)
+		}
+	}
+	return out
+}
+
+// isHostPath reports whether arg looks like a Windows path that the guest
+// needs translated: an absolute path, or a relative path with backslashes
+// that exists.
+func isHostPath(arg string) bool {
+	if filepath.IsAbs(arg) {
+		return true
+	}
+	if !strings.Contains(arg, `\`) {
+		return false
+	}
+	_, err := os.Stat(arg)
+	return err == nil
 }
 
 func existingPathMount(path string) string {

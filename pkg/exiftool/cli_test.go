@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,24 @@ func TestReadMetadataTags(t *testing.T) {
 	}
 	if len(tags) == 0 {
 		t.Error("expected the remaining tags")
+	}
+}
+
+func TestGuestPathWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		if got := guestPath("/tmp/a b/c.jpg"); got != "/tmp/a b/c.jpg" {
+			t.Errorf("guestPath changed a Unix path: %q", got)
+		}
+		return
+	}
+	if got := guestPath(`C:\Users\me\a.jpg`); got != "/C/Users/me/a.jpg" {
+		t.Errorf("guestPath = %q", got)
+	}
+	args := guestArgs([]string{`-Comment=C:\keep\this`, `-Artist<=C:\x\artist.txt`, `C:\photos\a.jpg`, "-ver"})
+	want := []string{`-Comment=C:\keep\this`, `-Artist<=/C/x/artist.txt`, "/C/photos/a.jpg", "-ver"}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Errorf("guestArgs[%d] = %q, want %q", i, args[i], want[i])
+		}
 	}
 }
