@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. v1.2.0). The tag is created on the selected branch's HEAD."
+        required: true
 
 permissions:
   contents: write
@@ -17,16 +22,34 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A tag pushed with GITHUB_TOKEN does not trigger other workflows, so a
+      # manual release creates the tag here and continues in the same job.
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version must look like v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::tag $VERSION already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "$VERSION"
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build exiftool.wasm
-        run: |
-          docker build -t exiftool-wasm-builder ./build
-          docker run --rm --user "$(id -u):$(id -g)" -v "$(pwd)/pkg/exiftool/wasm:/output" exiftool-wasm-builder
-
+      # Release binaries embed the committed pkg/exiftool/wasm/exiftool.wasm,
+      # the same file that CI tested and that Go module users get. Rebuild it
+      # with the "Build WASM" workflow and commit it when it needs to change.
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
