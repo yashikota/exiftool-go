@@ -7,7 +7,7 @@
 # Or use the build script:
 #   ./build/build.sh
 
-FROM debian:trixie-slim@sha256:89c1ea91e897f0fe0a3731595330bc45b8bdef4047464a07116f891a94054b31 AS base
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS base
 
 ARG TARGETPLATFORM
 ARG WASI_SDK_VERSION=27
@@ -120,6 +120,6 @@ RUN mkdir -p /artifacts && \
     cp /build/wasm/zeroperl.wasm /artifacts/exiftool.wasm
 
 
-FROM debian:trixie-slim@sha256:89c1ea91e897f0fe0a3731595330bc45b8bdef4047464a07116f891a94054b31
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 COPY --from=final /artifacts /artifacts
 CMD ["cp", "/artifacts/exiftool.wasm", "/output/exiftool.wasm"]
